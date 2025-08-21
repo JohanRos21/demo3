@@ -129,7 +129,7 @@ st.write("Resumen estadístico (simulación de boxplot):")
 st.dataframe(subset_plot.describe().T)
 
 
- =========================
+#=========================
 # Cargar datos
 # =========================
 @st.cache_data
