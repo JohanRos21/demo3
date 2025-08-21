@@ -120,47 +120,6 @@ st.write("Resumen estadístico (simulación de boxplot):")
 st.dataframe(subset_plot.describe().T)
 
 
-st.header("i) Serie de tiempo por pais")
-
-pais_sel = st.selectbox("Selecciona un pais", sorted(df[country_col].unique().tolist()), index=0)
-
-@st.cache_data(show_spinner=False)
-def load_time_series(country: str):
-    # URLs de series de tiempo globales
-    url_conf = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
-    url_deaths = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv"
-
-    confirmed = pd.read_csv(url_conf)
-    deaths = pd.read_csv(url_deaths)
-
-    # Filtrar por pais
-    conf = confirmed[confirmed["Country/Region"] == country].drop(columns=["Province/State","Lat","Long"])
-    death = deaths[deaths["Country/Region"] == country].drop(columns=["Province/State","Lat","Long"])
-
-    # Sumar todas las provincias/estados para el pais
-    conf = conf.drop(columns=["Country/Region"]).sum().reset_index()
-    death = death.drop(columns=["Country/Region"]).sum().reset_index()
-
-    conf.columns = ["Date", "Confirmed"]
-    death.columns = ["Date", "Deaths"]
-
-    df_ts = pd.merge(conf, death, on="Date")
-    df_ts["Date"] = pd.to_datetime(df_ts["Date"], errors="coerce")
-    df_ts = df_ts.dropna(subset=["Date"])  
-    return df_ts
-
-df_ts = load_time_series(pais_sel)
-
-if not df_ts.empty:
-    fig = px.line(df_ts, x="Date", y=["Confirmed", "Deaths"],
-                  title=f"Evolucion temporal en {pais_sel}")
-    st.plotly_chart(fig, use_container_width=True)
-
-
-
-else:
-    st.warning("No se encontraron datos para este pais.")
-
 
 
 
