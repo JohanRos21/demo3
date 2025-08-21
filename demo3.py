@@ -9,6 +9,8 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 from sklearn.metrics import mean_absolute_error
 
+from io import BytesIO
+
 st.set_page_config(page_title="COVID-19 Viz – Pregunta 2", layout="wide")
 
 GITHUB_BASE = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports"
@@ -127,145 +129,112 @@ st.write("Resumen estadístico (simulación de boxplot):")
 st.dataframe(subset_plot.describe().T)
 
 
-# =======================
-# PARTE 3: Modelado y proyecciones
-# =======================
-st.header("3) Modelado temporal y proyecciones (14 días)")
+ =========================
+# Cargar datos
+# =========================
+@st.cache_data
+def load_data():
+    url = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports/04-18-2022.csv"
+    df = pd.read_csv(url)
+    df["Last_Update"] = pd.to_datetime(df["Last_Update"])
+    return df
 
-# === NUEVO: construir serie temporal df_ts ===
-df_ts = df[df[cols["country"]] == pais_sel].copy()
-if "Date" not in df_ts.columns:
-    df_ts["Date"] = pd.to_datetime(fecha)
+df = load_data()
 
-df_ts = df_ts.groupby("Date")[[cols["confirmed"], cols["deaths"]]].sum().reset_index()
-df_ts = df_ts.rename(columns={cols["confirmed"]: "Confirmed", cols["deaths"]: "Deaths"})
+# =========================
+# Sidebar con filtros (5.1)
+# =========================
+st.sidebar.header("Filtros")
 
-df_ts["NewConfirmed"] = df_ts["Confirmed"].diff().fillna(0).clip(lower=0)
-df_ts["NewDeaths"]    = df_ts["Deaths"].diff().fillna(0).clip(lower=0)
+paises = st.sidebar.multiselect("Países", df["Country_Region"].unique(), default=["Peru","Brazil","Mexico"])
+fecha_min, fecha_max = df["Last_Update"].min(), df["Last_Update"].max()
+rango_fechas = st.sidebar.date_input("Rango de fechas", [fecha_min, fecha_max])
+umbral_confirmados = st.sidebar.slider("Umbral de confirmados", 0, int(df["Confirmed"].max()), 1000)
 
+# =========================
+# KPIs principales (5.2)
+# =========================
+st.title("📊 Dashboard COVID-19")
 
-# --- 3.1 Serie de tiempo con suavizado 7 días ---
-st.subheader("3.1 Serie con suavizado de 7 días (nuevos casos y muertes)")
+df_filtrado = df[df["Country_Region"].isin(paises)]
+total_confirmados = df_filtrado["Confirmed"].sum()
+total_fallecidos = df_filtrado["Deaths"].sum()
+cfr = (total_fallecidos / total_confirmados) * 100 if total_confirmados > 0 else 0
 
-df_ts["NewConfirmed_7d"] = df_ts["NewConfirmed"].rolling(7, min_periods=1).mean()
-df_ts["NewDeaths_7d"]    = df_ts["NewDeaths"].rolling(7, min_periods=1).mean()
+col1, col2, col3 = st.columns(3)
+col1.metric("Confirmados", f"{total_confirmados:,}")
+col2.metric("Fallecidos", f"{total_fallecidos:,}")
+col3.metric("CFR (%)", f"{cfr:.2f}")
 
-fig_smooth = go.Figure()
-fig_smooth.add_trace(go.Scatter(x=df_ts["Date"], y=df_ts["NewConfirmed_7d"], name="Nuevos Confirmados (7d)"))
-fig_smooth.add_trace(go.Scatter(x=df_ts["Date"], y=df_ts["NewDeaths_7d"],    name="Nuevas Muertes (7d)"))
-fig_smooth.update_layout(title=f"Suavizado (7 días) – {pais_sel}", xaxis_title="Fecha", yaxis_title="Casos diarios (media móvil)")
-st.plotly_chart(fig_smooth, use_container_width=True)
+# =========================
+# Tabs (5.3)
+# =========================
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "Visión general", "Estadística avanzada", 
+    "Modelado temporal", "Clustering y PCA", "Calidad de datos"
+])
 
-st.divider()
+# -------- Tab 1: Visión general
+with tab1:
+    st.subheader("Top-N países por confirmados")
+    top_paises = df.groupby("Country_Region")["Confirmed"].sum().sort_values(ascending=False).head(10)
+    fig1 = px.bar(top_paises, x=top_paises.index, y=top_paises.values, title="Top 10 países confirmados")
+    st.plotly_chart(fig1, use_container_width=True)
 
-# --- Controles para el modelo ---
-st.subheader("3.2 Pronóstico con SARIMAX (14 días)")
-target_var = st.selectbox("Variable a pronosticar", ["NewConfirmed", "NewDeaths"], index=1)
-horizon = st.slider("Horizonte de pronóstico (días)", 7, 21, 14)
-use_log = st.checkbox("Usar transformación log1p (estabiliza varianza)", value=True)
-seasonal = st.checkbox("Estacionalidad semanal (7 días)", value=True)
+    st.subheader("Mapa interactivo")
+    fig2 = px.scatter_geo(df, locations="Country_Region", locationmode="country names",
+                          size="Confirmed", color="Deaths",
+                          hover_name="Country_Region", title="Mapa global COVID-19")
+    st.plotly_chart(fig2, use_container_width=True)
 
-# Parámetros
-order_p = st.number_input("AR (p)", 0, 3, 1)
-order_d = st.number_input("Diferencias (d)", 0, 2, 1)
-order_q = st.number_input("MA (q)", 0, 3, 1)
-if seasonal:
-    sp, sd, sq, s = st.columns([1,1,1,1])
-    with sp: P = st.number_input("SAR (P)", 0, 3, 1)
-    with sd: D = st.number_input("SDiff (D)", 0, 2, 1)
-    with sq: Q = st.number_input("SMA (Q)", 0, 3, 1)
-    with s:  S = st.number_input("Periodo estacional (S)", 2, 14, 7)
-else:
-    P=D=Q=0
-    S=0
+# -------- Tab 2: Estadística avanzada
+with tab2:
+    st.subheader("Boxplot Confirmados/Deaths")
+    fig3 = px.box(df_filtrado, y=["Confirmed","Deaths"])
+    st.plotly_chart(fig3, use_container_width=True)
 
-# Prepara serie
-ts = df_ts[["Date", target_var]].dropna().copy()
-ts = ts.set_index("Date").asfreq("D")
-ts[target_var] = ts[target_var].fillna(0)
+    st.info("Aquí irían los test de hipótesis y los intervalos de confianza.")
 
-y = np.log1p(ts[target_var]) if use_log else ts[target_var]
+# -------- Tab 3: Modelado temporal
+with tab3:
+    st.subheader("Series de tiempo (ejemplo simple)")
+    ts = df_filtrado.groupby("Last_Update")["Confirmed"].sum().reset_index()
+    fig4 = px.line(ts, x="Last_Update", y="Confirmed", title="Confirmados en el tiempo")
+    st.plotly_chart(fig4, use_container_width=True)
+    st.warning("Aquí se agregaría forecast y validación.")
 
-valid_len = min(28, max(14, int(len(y)*0.2)))
-train = y.iloc[:-valid_len]
-test  = y.iloc[-valid_len:]
+# -------- Tab 4: Clustering y PCA
+with tab4:
+    st.subheader("Clustering/PCA")
+    st.info("Pendiente: aplicar K-means y PCA para agrupar países.")
 
-def fit_sarimax(endog):
-    if seasonal and S > 0:
-        model = SARIMAX(endog, order=(order_p, order_d, order_q),
-                        seasonal_order=(P, D, Q, S), enforce_stationarity=False, enforce_invertibility=False)
-    else:
-        model = SARIMAX(endog, order=(order_p, order_d, order_q),
-                        enforce_stationarity=False, enforce_invertibility=False)
-    return model.fit(disp=False)
+# -------- Tab 5: Calidad de datos
+with tab5:
+    st.subheader("Valores nulos")
+    st.write(df.isna().sum())
+    st.subheader("Gráfico de control (muertes diarias)")
+    st.warning("Pendiente: control chart 3σ")
 
-# --- 3.3 Backtesting ---
-st.subheader("3.3 Validación con backtesting (MAE / MAPE)")
-def walk_forward_mae_mape(train_series, test_series):
-    history = train_series.copy()
-    preds = []
-    for t in range(len(test_series)):
-        res = fit_sarimax(history)
-        fc = res.get_forecast(steps=1).predicted_mean.iloc[0]
-        preds.append(fc)
-        history = history.append(test_series.iloc[t:t+1])
-    preds = pd.Series(preds, index=test_series.index)
+# =========================
+# Exportación de datos (5.4)
+# =========================
+st.sidebar.header("Exportar resultados")
 
-    if use_log:
-        preds_inv = np.expm1(preds.clip(max=20))
-        test_inv  = np.expm1(test_series)
-    else:
-        preds_inv = preds.clip(min=0)
-        test_inv  = test_series
+def convert_df(df):
+    return df.to_csv(index=False).encode("utf-8")
 
-    mae  = float(mean_absolute_error(test_inv, preds_inv))
-    mape = float((np.abs((test_inv - preds_inv) / np.maximum(test_inv, 1e-9))).mean() * 100)
-    return mae, mape, preds_inv, test_inv
+csv = convert_df(df_filtrado)
 
-mae, mape, preds_bt, test_bt = walk_forward_mae_mape(train, test)
-c1, c2 = st.columns(2)
-with c1: st.metric("MAE (validación)", f"{mae:,.2f}")
-with c2: st.metric("MAPE (validación)", f"{mape:,.2f}%")
-
-fig_bt = go.Figure()
-fig_bt.add_trace(go.Scatter(x=test_bt.index, y=test_bt, name="Real (validación)"))
-fig_bt.add_trace(go.Scatter(x=preds_bt.index, y=preds_bt, name="Pronóstico (walk-forward)"))
-fig_bt.update_layout(title="Backtesting en ventana de validación", xaxis_title="Fecha", yaxis_title=target_var)
-st.plotly_chart(fig_bt, use_container_width=True)
-
-st.divider()
-
-# --- 3.4 Pronóstico final ---
-st.subheader("3.4 Pronóstico final y bandas de confianza")
-
-res_final = fit_sarimax(y)
-fc_res = res_final.get_forecast(steps=horizon)
-fc_mean = fc_res.predicted_mean
-fc_ci   = fc_res.conf_int(alpha=0.05)
-
-if use_log:
-    fc_mean_plot = np.expm1(fc_mean.clip(max=20))
-    lower = np.expm1(fc_ci.iloc[:, 0].clip(max=20))
-    upper = np.expm1(fc_ci.iloc[:, 1].clip(max=20))
-    hist_line = np.expm1(y)
-else:
-    fc_mean_plot = fc_mean.clip(min=0)
-    lower = fc_ci.iloc[:, 0].clip(lower=0)
-    upper = fc_ci.iloc[:, 1].clip(lower=0)
-    hist_line = y
-
-fig_fc = go.Figure()
-fig_fc.add_trace(go.Scatter(x=hist_line.index, y=hist_line, name="Histórico", mode="lines"))
-fig_fc.add_trace(go.Scatter(x=fc_mean_plot.index, y=fc_mean_plot, name="Forecast", mode="lines"))
-fig_fc.add_trace(go.Scatter(
-    x=list(fc_mean_plot.index)+list(fc_mean_plot.index[::-1]),
-    y=list(upper)+list(lower[::-1]),
-    fill="toself", name="IC 95%"
-))
-fig_fc.update_layout(
-    title=f"Pronóstico {target_var} a {horizon} días – {pais_sel}",
-    xaxis_title="Fecha", yaxis_title=target_var
+st.sidebar.download_button(
+    label="📥 Descargar CSV",
+    data=csv,
+    file_name="covid_export.csv",
+    mime="text/csv"
 )
-st.plotly_chart(fig_fc, use_container_width=True)
 
+# =========================
+# Narrativa automática (5.5)
+# =========================
+st.subheader("Narrativa automática")
+st.write(f"En los países seleccionados ({', '.join(paises)}), se registran {total_confirmados:,} casos confirmados y {total_fallecidos:,} fallecidos, con una CFR estimada en {cfr:.2f}%.")
 
