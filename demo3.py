@@ -156,14 +156,8 @@ if not df_ts.empty:
                   title=f"Evolucion temporal en {pais_sel}")
     st.plotly_chart(fig, use_container_width=True)
 
-# Casuística extra: nuevos casos diarios
-st.subheader("Nuevos casos y muertes diarios")
-df_ts["NewConfirmed"] = df_ts["Confirmed"].diff().fillna(0)
-df_ts["NewDeaths"] = df_ts["Deaths"].diff().fillna(0)
 
-fig2 = px.bar(df_ts, x="Date", y=["NewConfirmed", "NewDeaths"],
-              title=f"Nuevos casos y muertes diarios en {pais_sel}")
-st.plotly_chart(fig2, use_container_width=True)
+
 else:
     st.warning("No se encontraron datos para este pais.")
 
